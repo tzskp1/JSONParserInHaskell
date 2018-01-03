@@ -6,8 +6,8 @@ import GHC.IO.Encoding
 data JStr = JStr [Char] deriving Show
 
 data JValue =
-    JStrAsVal JStr
-  | JNumber (Int,Int,Int)        -- int,frac,exp
+    JStrOfVal JStr
+  | JNumber Double
   | JObject [(JStr,JValue)]
   | JArray [JValue]
   | JTrue
@@ -15,46 +15,48 @@ data JValue =
   | JNull
   deriving Show
 
-intOfStr [] = error "intOfStr"
-intOfStr xs = foldl (\a b -> 10 * a + b) 0 $ map digitToInt xs
--- なぜか型注釈がないとコンパイルエラーになる
-fracPart :: ParsecT [Char] u Identity Int
-fracPart = ((char '.') *> (intOfStr <$> ((:) <$> digit <*> many digit)))
-           <|> (return 0)
-expPart :: ParsecT [Char] u Identity Int
-expPart = ((char 'e' <|> char 'E')
-           *> (char '+' *> (intOfStr <$> ((:) <$> digit <*> many digit))
-           <|> (char '-' *> (((* (-1)) . intOfStr) <$> ((:) <$> digit <*> many digit)))
-           <|> (intOfStr <$> ((:) <$> digit <*> many digit))))
-          <|> (return 0)
-intPart :: ParsecT [Char] u Identity Int
-intPart = (char '-' *> (((* (-1)) . intOfStr)
-                        <$> ((:) <$> oneOf "123456789" <*> many digit)))
-          <|> (intOfStr <$> ((:) <$> oneOf "123456789" <*> many digit))
+intOfStr xs = foldl (\a b -> 10 * a + b) 0.0 $ map (fromIntegral . digitToInt) xs
+fracPart =
+  let frcOfStr xs = foldr (\a b -> (b / 10.0) + a) 0.0 (0.0 : map (fromIntegral . digitToInt) xs)
+  in char '.' *> (frcOfStr <$> ((:) <$> digit <*> many digit)) <|> return 0.0
+expPart =
+  let intOfDigits = intOfStr <$> ((:) <$> digit <*> many digit)
+  in ((char 'e' <|> char 'E')
+       *> (char '+' *> intOfDigits
+           <|> (char '-' *> ((* (-1)) <$> intOfDigits))
+           <|> intOfDigits)) <|> return 0.0
+intPart = intOfStr <$> ((:) <$> oneOf "123456789" <*> many digit)
+          <|> (char '0' *> return 0.0)
+signPart = (char '-' *> return (-1.0)) <|> return 1.0
 numParser =
-  let numOf [x,y,z] = JNumber (x,y,z)
-  in numOf <$> sequence [intPart,fracPart,expPart]
+  let numOf [x,y,z,w] =
+        let expPart n res = if n == 0 then res
+                            else if n > 0 then expPart (n - 1) (res * 10.0)
+                                 else expPart (n + 1) (res / 10.0)
+        in JNumber (x * (y + z) * (expPart w 1.0))
+  in numOf <$> sequence [signPart,intPart,fracPart,expPart] 
 
 parenParser :: Char -> Char -> [Char] -> ParsecT [Char] u Identity v -> ParsecT [Char] u Identity [v]
 parenParser st_char ed_char sep_lst psr =
   let parenS = char st_char
       parenE = char ed_char *> return []
-      loop = (:) <$> psr <*> (parenE <|> ((sequence . (map char)) sep_lst *> loop))
+      sep = sequence . (map char) $ sep_lst
+      loop = (:) <$> psr <*> (parenE <|> (sep *> loop))
   in (try (parenS *> parenE)) <|> (parenS *> loop)
 
-hexPart = let hex = oneOf "0123456789ABCDEFabcdef"
-              charOfHex xs = chr $ foldl (\a b -> 16 * a + b) 0 $ map digitToInt xs
-          in char 'u' *> (charOfHex <$> sequence [hex,hex,hex,hex])
-escChar = char '\\'
-          *> (hexPart
-              <|> (char '"' *> return '"')
-              <|> (char '\\' *> return '\\')
-              <|> (char '/' *> return '/')
-              <|> (char 'b' *> return '\BS')
-              <|> (char 'f' *> return '\FF')
-              <|> (char 'n' *> return '\n')
-              <|> (char 'r' *> return '\r')
-              <|> (char 't' *> return '\t'))
+escChar =
+  let hexPart = let hex = oneOf "0123456789ABCDEFabcdef"
+                    charOfHex xs = chr $ foldl (\a b -> 16 * a + b) 0 $ map digitToInt xs
+                in char 'u' *> (charOfHex <$> sequence [hex,hex,hex,hex])
+  in char '\\'
+     *> (hexPart <|> (char '"' *> return '"')
+         <|> (char '\\' *> return '\\')
+         <|> (char '/' *> return '/')
+         <|> (char 'b' *> return '\BS')
+         <|> (char 'f' *> return '\FF')
+         <|> (char 'n' *> return '\n')
+         <|> (char 'r' *> return '\r')
+         <|> (char 't' *> return '\t'))
 strParser = JStr <$> (parenParser '"' '"' [] (escChar <|> anyChar))
 
 arrParser = JArray <$> (parenParser '[' ']' "," valParser)
@@ -66,13 +68,15 @@ objParser = JObject <$> (parenParser '{' '}' ","
 
 boolParser = (string "true" *> return JTrue) <|> (string "false" *> return JFalse)
 
-nullParser = (string "null" *> return JNull)
+nullParser = string "null" *> return JNull
 
 valParser = spaces
-            *> ((JStrAsVal <$> strParser) <|> numParser
-                <|> objParser <|> arrParser
+            *> (JStrOfVal <$> strParser
+                <|> numParser <|> objParser <|> arrParser
                 <|> boolParser <|> nullParser)
             <* spaces
 
-main = setLocaleEncoding utf8
-       >> (readFile "./test.json" >>= \js -> print $ parse valParser "" js)
+main = do
+  js <- readFile "./test.json"
+  setLocaleEncoding utf8
+  print $ parse valParser "" js
