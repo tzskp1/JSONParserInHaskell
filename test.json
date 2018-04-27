@@ -1,0 +1,16 @@
+{ "name"   : "John Smith",
+  "\u0021sku"    : -0.20223,
+  "price"  : 23.95,
+  "price2" : true,
+  "price3" : false,
+  "shipTo" : { "name" : "Jane Smith",
+               "address" : "123 Maple Street",
+               "city" : "Pretendville",
+               "state" : "NY" ,
+               "zip"   : "12345" },
+  "billTo" : { "name" : "John Smith",
+               "address" : "123 Maple Street",
+               "city" : "Pretendville",
+               "state" : "NY",
+               "zip"   : "12345" }
+}

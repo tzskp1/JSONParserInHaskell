@@ -3,12 +3,10 @@ import Data.Functor.Identity
 import Data.Char
 import GHC.IO.Encoding
 
-data JStr = JStr [Char] deriving Show
-
 data JValue =
-    JStrOfVal JStr
+    JString [Char]
   | JNumber Double
-  | JObject [(JStr,JValue)]
+  | JObject [([Char],JValue)]
   | JArray [JValue]
   | JTrue
   | JFalse
@@ -22,9 +20,9 @@ fracPart =
 expPart =
   let intOfDigits = intOfStr <$> ((:) <$> digit <*> many digit)
   in ((char 'e' <|> char 'E')
-       *> (char '+' *> intOfDigits
-           <|> (char '-' *> ((* (-1)) <$> intOfDigits))
-           <|> intOfDigits)) <|> return 0.0
+      *> (char '+' *> intOfDigits
+          <|> (char '-' *> ((* (-1)) <$> intOfDigits))
+          <|> intOfDigits)) <|> return 0.0
 intPart = intOfStr <$> ((:) <$> oneOf "123456789" <*> many digit)
           <|> (char '0' *> return 0.0)
 signPart = (char '-' *> return (-1.0)) <|> return 1.0
@@ -42,7 +40,7 @@ parenParser st_char ed_char sep_lst psr =
       parenE = char ed_char *> return []
       sep = sequence . (map char) $ sep_lst
       loop = (:) <$> psr <*> (parenE <|> (sep *> loop))
-  in (try (parenS *> parenE)) <|> (parenS *> loop)
+  in parenS *> (parenE <|> loop)
 
 escChar =
   let hexPart = let hex = oneOf "0123456789ABCDEFabcdef"
@@ -57,7 +55,7 @@ escChar =
          <|> (char 'n' *> return '\n')
          <|> (char 'r' *> return '\r')
          <|> (char 't' *> return '\t'))
-strParser = JStr <$> (parenParser '"' '"' [] (escChar <|> anyChar))
+strParser = parenParser '"' '"' "" (escChar <|> anyChar)
 
 arrParser = JArray <$> (parenParser '[' ']' "," valParser)
 
@@ -70,13 +68,14 @@ boolParser = (string "true" *> return JTrue) <|> (string "false" *> return JFals
 
 nullParser = string "null" *> return JNull
 
-valParser = spaces
-            *> (JStrOfVal <$> strParser
-                <|> numParser <|> objParser <|> arrParser
-                <|> boolParser <|> nullParser)
-            <* spaces
+valParser =
+  spaces *> (JString <$> strParser
+             <|> numParser <|> objParser <|> arrParser
+             <|> boolParser <|> nullParser)
+  <* spaces
 
+-- app mf mv = mf >>= (\f -> mv >>= \v -> return . f $ v)
 main = do
-  js <- readFile "./test.json"
   setLocaleEncoding utf8
+  js <- readFile "./test.json"
   print $ parse valParser "" js
